@@ -4,6 +4,12 @@
 
 A KOReader plugin that removes page numbers from the bottom of manga pages (CBZ).
 
+<br>
+
+<picture>
+<img src="screenshots/pagenumbercrop_menu.png" width="500">
+</picture>
+
 ## What it does
 
 Automatically detects and removes the page number from each page.
