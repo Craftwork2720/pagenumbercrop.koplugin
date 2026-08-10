@@ -1,0 +1,43 @@
+name: Release
+
+# Push a tag like "v1.1.0" to build pagenumbercrop.koplugin.zip and attach it
+# to a GitHub Release. pagenumbercrop_updater.lua looks for an asset named
+# exactly "pagenumbercrop.koplugin.zip" on the *latest* release.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check that _meta.lua version matches the tag
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          meta_version=$(grep -oP 'version\s*=\s*"\K[^"]+' pagenumbercrop.koplugin/_meta.lua)
+          echo "Tag version:  $tag_version"
+          echo "_meta.lua version: $meta_version"
+          if [ "$tag_version" != "$meta_version" ]; then
+            echo "::error::Tag ($tag_version) does not match _meta.lua version ($meta_version). Bump _meta.lua's version field before tagging, or the updater will keep reporting this release as 'up to date' forever."
+            exit 1
+          fi
+
+      - name: Build plugin zip
+        run: |
+          zip -r pagenumbercrop.koplugin.zip pagenumbercrop.koplugin \
+            -x "*.git*" -x "*/.DS_Store"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Asset name must stay exactly this, it's hardcoded as ASSET_NAME
+          # in pagenumbercrop_updater.lua.
+          files: pagenumbercrop.koplugin.zip
+          generate_release_notes: true
