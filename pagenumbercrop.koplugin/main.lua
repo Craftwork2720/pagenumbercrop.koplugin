@@ -773,6 +773,8 @@ function PageNumberCrop.pageMostlyBlank(bb)
     -- Only clearly-dark pixels count as content (same threshold as analyzeStrip).
     local dark_threshold = 128
     local x_step, y_step = 2, 2 -- sample every other pixel, for speed
+    local total_area = w * h
+    local max_blank_area = PageNumberCrop.BLANK_MAX_CONTENT_AREA * total_area
 
     local found = false
     local xmin, ymin, xmax, ymax = w, h, -1, -1
@@ -784,6 +786,13 @@ function PageNumberCrop.pageMostlyBlank(bb)
                 if x > xmax then xmax = x end
                 if y < ymin then ymin = y end
                 if y > ymax then ymax = y end
+                -- The content bbox only ever grows as more ink is found, so once its
+                -- area crosses the "mostly blank" threshold, the page is definitely
+                -- not blank -- most pages, having real content, hit this within a
+                -- fraction of the sample grid, so the rest is never scanned.
+                if (xmax - xmin + 1) * (ymax - ymin + 1) >= max_blank_area then
+                    return false
+                end
             end
         end
     end
@@ -792,7 +801,7 @@ function PageNumberCrop.pageMostlyBlank(bb)
     end
     -- The content box as a fraction of the page area. Below BLANK_MAX_CONTENT_AREA
     -- the page is almost entirely white: keep it uncropped.
-    local content_area = (xmax - xmin + 1) * (ymax - ymin + 1) / (w * h)
+    local content_area = (xmax - xmin + 1) * (ymax - ymin + 1) / total_area
     return content_area < PageNumberCrop.BLANK_MAX_CONTENT_AREA
 end
 
