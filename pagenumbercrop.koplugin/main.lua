@@ -59,9 +59,9 @@ local PAGE_NUMBER_CROP_AUTO_OPTION = {
     event = "ReZoom",
     args = {0, 1},
     name_text_hold_callback = optionsutil.showValues,
-    help_text = _([[Master switch for the page-number crop.
-This option is only available when "Page Crop" is set to "auto"; otherwise it is
-greyed out.]]),
+    help_text = _([[Automatically removes the printed page number when "Page Crop" is "auto". Nothing is cropped if no number is found.
+
+Only available in that mode; otherwise greyed out.]]),
 }
 
 -- When "Page Crop" is "auto", a page that is almost entirely white -- e.g. a chapter
@@ -84,11 +84,9 @@ local NO_CROP_BLANK_PAGES_OPTION = {
     event = "ReZoom",
     args = {0, 1},
     name_text_hold_callback = optionsutil.showValues,
-    help_text = _([[Do not crop almost-blank pages.
-When "Page Crop" is "auto", a page that is almost entirely white -- e.g. a chapter
-divider or a title page with only a small logo -- would otherwise be cropped into
-that small element. When this option is enabled, such pages are shown with no crop
-at all.]]),
+    help_text = _([[Keeps almost-blank pages (chapter dividers, title pages) uncropped instead of zooming into a small element.
+
+Only available when "Page Crop" is "auto".]]),
 }
 
 local PageNumberCrop = WidgetContainer:extend{
@@ -187,7 +185,7 @@ function PageNumberCrop:addToMainMenu(menu_items)
                 updater.checkForUpdates()
             else
                 UIManager:show(InfoMessage:new{
-                    text = _("Updater module not found (pagenumbercrop_updater.lua is missing)."),
+                    text = _("Could not find the updater component."),
                 })
             end
         end,
