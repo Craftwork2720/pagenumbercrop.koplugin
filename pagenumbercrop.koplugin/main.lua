@@ -23,13 +23,20 @@ The crop is applied to the page's bounding box, on top of the auto page crop, so
 effect in the content-fit zoom modes. The settings are stored per-book
 (kopt_page_number_crop_auto, kopt_no_crop_blank_pages) like any other KOpt option.
 
+The same features are exposed as gesture/keyboard-shortcut actions (registered with the
+Dispatcher at module load time), so they can be bound to a gesture: crop the page number
+on the current page, and on/off/toggle for each of the two options.
+
 @module koplugin.PageNumberCrop
 --]]--
 
 local Document = require("document/document")
-local KoptOptions = require("ui/data/koptoptions")
-local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local Dispatcher = require("dispatcher")
+local Event = require("ui/event")
 local Geom = require("ui/geometry")
+local KoptOptions = require("ui/data/koptoptions")
+local Notification = require("ui/widget/notification")
+local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
 local optionsutil = require("ui/data/optionsutil")
@@ -215,6 +222,115 @@ function PageNumberCrop:onReadSettings(config)
     self:_neutralizeLegacyCrop(self.document.configurable)
 end
 
+-- Dispatcher event handlers --------------------------------------------------
+-- These back the gesture/keyboard-shortcut actions registered at the bottom of
+-- the file. Events reach the plugin because ReaderUI registers every plugin as
+-- a widget, so UIManager:sendEvent fans them out to on<EventName> here.
+
+-- Apply a new value to one of the injected KOpt options, exactly like toggling
+-- it in the KOpt settings dialog: write the live configurable value (which the
+-- getPageBBox wrapper reads on every render), persist it as a per-book setting,
+-- and fire "ReZoom" so the current page is re-rendered with the new state. The
+-- auto-bbox DocCache entry is keyed by the configurable hash, so the changed
+-- value also invalidates the cached crop. Returns false when the option doesn't
+-- exist (non-KOpt document, or the plugin early-returned on a reflowed document).
+function PageNumberCrop:_setKoptOption(name, value)
+    local configurable = self.document and self.document.configurable
+    if not (configurable and configurable[name] ~= nil) then
+        return false
+    end
+    configurable[name] = value
+    if self.ui and self.ui.doc_settings then
+        self.ui.doc_settings:saveSetting("kopt_" .. name, value)
+    end
+    self.ui:handleEvent(Event:new("ReZoom"))
+    return true
+end
+
+function PageNumberCrop:_setKoptOptionAndNotify(name, value, text)
+    if self:_setKoptOption(name, value) then
+        UIManager:show(Notification:new{ text = text, timeout = 2 })
+    end
+end
+
+function PageNumberCrop:onPageNumberCropAutoOn()
+    self:_setKoptOptionAndNotify("page_number_crop_auto", 1,
+        _("Page Number Crop: on"))
+end
+
+function PageNumberCrop:onPageNumberCropAutoOff()
+    self:_setKoptOptionAndNotify("page_number_crop_auto", 0,
+        _("Page Number Crop: off"))
+end
+
+function PageNumberCrop:onPageNumberCropAutoToggle()
+    local configurable = self.document and self.document.configurable
+    local v = configurable and configurable.page_number_crop_auto
+    local on = v == 1 or v == "1"
+    self:_setKoptOptionAndNotify("page_number_crop_auto", on and 0 or 1,
+        on and _("Page Number Crop: off") or _("Page Number Crop: on"))
+end
+
+function PageNumberCrop:onNoCropBlankPagesOn()
+    self:_setKoptOptionAndNotify("no_crop_blank_pages", 1,
+        _("No crop on blank pages: on"))
+end
+
+function PageNumberCrop:onNoCropBlankPagesOff()
+    self:_setKoptOptionAndNotify("no_crop_blank_pages", 0,
+        _("No crop on blank pages: off"))
+end
+
+function PageNumberCrop:onNoCropBlankPagesToggle()
+    local configurable = self.document and self.document.configurable
+    local v = configurable and configurable.no_crop_blank_pages
+    local on = v == 1 or v == "1"
+    self:_setKoptOptionAndNotify("no_crop_blank_pages", on and 0 or 1,
+        on and _("No crop on blank pages: off") or _("No crop on blank pages: on"))
+end
+
+-- Force the page-number crop on the current page, regardless of the auto-detect
+-- option. The auto mode refuses a detection that doesn't match where the number
+-- sits on the other pages (the history check in _pagenum_strip); this action
+-- re-runs detection fresh and accepts the result anyway, for that one page.
+-- Still requires "Page Crop" to be "auto" (the crop is an adjustment of the auto
+-- page-crop bbox) and a paged KOpt document.
+function PageNumberCrop:onPageNumberCropOnThisPage()
+    local document = self.document
+    if not (document and document.koptinterface) then
+        return
+    end
+    local configurable = document.configurable
+    if not configurable or configurable.text_wrap == 1 or configurable.trim_page ~= 1 then
+        UIManager:show(Notification:new{
+            text = _("Page Number Crop: only available when \"Page Crop\" is \"auto\"."),
+            timeout = 2,
+        })
+        return
+    end
+    local page = self.ui:getCurrentPage()
+    if not page then
+        return
+    end
+    -- Forget any earlier failed detection for this page, then re-run it with the
+    -- history check bypassed, so the result is exactly what this page contains.
+    document._pagenum_cache[page] = nil
+    local crop_y = document:_pagenum_strip(page, true)
+    if crop_y and crop_y > 0 then
+        document._pagenum_force_crop_pages[page] = true
+        self.ui:handleEvent(Event:new("ReZoom"))
+        UIManager:show(Notification:new{
+            text = _("Cropped the page number on this page."),
+            timeout = 2,
+        })
+    else
+        UIManager:show(Notification:new{
+            text = _("No page number found on this page."),
+            timeout = 2,
+        })
+    end
+end
+
 -- Insert the options into the KOpt settings dialog, between "Page Crop" and "Margin".
 -- Also drop the obsolete fixed-% crop option from the original core patch, so it
 -- can't be re-enabled and crop the page number again.
@@ -270,6 +386,9 @@ function PageNumberCrop:patchPageBBox()
     -- Per-page detection cache, in native (bbox) units. Filled lazily.
     document._pagenum_cache = {}
     document._pagenum_blank_cache = {}
+    -- Pages the "Crop page number on this page" dispatcher action forced a crop
+    -- on, regardless of the auto-detect option (session-only, not persisted).
+    document._pagenum_force_crop_pages = {}
     -- Rolling history of accepted detections (as a fraction of page height),
     -- used to sanity-check new detections against where the number has
     -- consistently been on earlier pages of this book.
@@ -287,7 +406,11 @@ function PageNumberCrop:patchPageBBox()
         local blank = configurable and configurable.no_crop_blank_pages
         local auto_crop = configurable and configurable.text_wrap ~= 1
             and configurable.trim_page == 1
-        local crop_active = auto_crop and (auto == 1 or auto == "1")
+        -- A page in the force-crop set is cropped even when the auto-detect
+        -- option is off (the "Crop page number on this page" gesture).
+        local forced = self._pagenum_force_crop_pages
+            and self._pagenum_force_crop_pages[pageno] == true
+        local crop_active = auto_crop and ((auto == 1 or auto == "1") or forced)
         local blank_active = auto_crop and (blank == 1 or blank == "1")
         local active = crop_active or blank_active
         if self._pagenum_state ~= active then
@@ -339,7 +462,12 @@ function PageNumberCrop:patchPageBBox()
     -- Detect the native y-coordinate where the crop should end: right below the
     -- bottom-most panel, above the page-number strip and its white gutter.
     -- Returns 0 when no page number is detected (so nothing gets cropped).
-    document._pagenum_strip = function(self, pageno)
+    document._pagenum_strip = function(self, pageno, skip_history)
+        -- A forced page (or an explicit skip request) bypasses the history
+        -- consistency check below, so a gesture can accept a detection that the
+        -- automatic mode would have rejected as an outlier.
+        local forced = skip_history or (self._pagenum_force_crop_pages
+            and self._pagenum_force_crop_pages[pageno])
         local cached = self._pagenum_cache[pageno]
         if cached ~= nil then
             return cached
@@ -421,8 +549,9 @@ function PageNumberCrop:patchPageBBox()
         -- height, so it still works if the book mixes page sizes). A detection
         -- that's wildly off is very likely a false positive (some other small
         -- dark element near the bottom edge), not a real page-number move --
-        -- reject it rather than risk cropping real content.
-        if crop_y > 0 then
+        -- reject it rather than risk cropping real content. Forced pages skip
+        -- this whole check (and don't pollute the history with an outlier).
+        if crop_y > 0 and not forced then
             local history = self._pagenum_history
             local frac = crop_y / page_size.h
             if #history >= 3 then
@@ -802,5 +931,60 @@ function PageNumberCrop.pageMostlyBlank(bb)
     local content_area = (xmax - xmin + 1) * (ymax - ymin + 1) / total_area
     return content_area < PageNumberCrop.BLANK_MAX_CONTENT_AREA
 end
+
+-- Gesture & keyboard-shortcut actions (Dispatcher), so the plugin's features can
+-- be bound to a gesture or shortcut. Registered at module load time (like the
+-- hide-status-bar reference patch): a doc-only plugin can't hook the
+-- DispatcherRegisterActions broadcast, which fires at startup before any document
+-- is open. registerAction is idempotent, so the module being required once per
+-- session is fine. The menu/gesture editor reads Dispatcher.settingsList live.
+local function registerDispatcherActions()
+    if not (Dispatcher and Dispatcher.registerAction) then
+        return
+    end
+    Dispatcher:registerAction("crop_page_number_on_this_page", {
+        category = "none",
+        event = "PageNumberCropOnThisPage",
+        title = _("Crop page number on this page"),
+        reader = true,
+    })
+    Dispatcher:registerAction("page_number_crop_auto_on", {
+        category = "none",
+        event = "PageNumberCropAutoOn",
+        title = _("Page Number Crop: on"),
+        reader = true,
+    })
+    Dispatcher:registerAction("page_number_crop_auto_off", {
+        category = "none",
+        event = "PageNumberCropAutoOff",
+        title = _("Page Number Crop: off"),
+        reader = true,
+    })
+    Dispatcher:registerAction("page_number_crop_auto_toggle", {
+        category = "none",
+        event = "PageNumberCropAutoToggle",
+        title = _("Page Number Crop: toggle"),
+        reader = true,
+    })
+    Dispatcher:registerAction("no_crop_blank_pages_on", {
+        category = "none",
+        event = "NoCropBlankPagesOn",
+        title = _("No crop on blank pages: on"),
+        reader = true,
+    })
+    Dispatcher:registerAction("no_crop_blank_pages_off", {
+        category = "none",
+        event = "NoCropBlankPagesOff",
+        title = _("No crop on blank pages: off"),
+        reader = true,
+    })
+    Dispatcher:registerAction("no_crop_blank_pages_toggle", {
+        category = "none",
+        event = "NoCropBlankPagesToggle",
+        title = _("No crop on blank pages: toggle"),
+        reader = true,
+    })
+end
+registerDispatcherActions()
 
 return PageNumberCrop
