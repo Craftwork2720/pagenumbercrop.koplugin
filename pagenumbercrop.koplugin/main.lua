@@ -452,11 +452,16 @@ function PageNumberCrop.analyzeStrip(bb, y_start_override)
         return color:getColor8().a < dark_threshold
     end
 
-    -- Row ink profile, normalized to [0, 1], plus each row's ink horizontal span.
+    -- Lazily compute & cache a row's ink ratio and horizontal ink span. Scanning
+    -- proceeds bottom-up and stops as soon as the bottom-most panel is found --
+    -- typically well above y_start, since the last panel on a page usually starts
+    -- much higher than the bottom 15% -- so rows above that point are never even
+    -- read. This is the main cost of this function (up to ~1M getPixel calls on a
+    -- large page), so avoiding the unused part of the window matters.
     local ink = {}
     local span = {}
     local cols = math.ceil(w / x_step)
-    for y = y_start, h - 1 do
+    local function scanRow(y)
         local count = 0
         local xmin, xmax = w, -1
         for x = 0, w - 1, x_step do
@@ -469,6 +474,12 @@ function PageNumberCrop.analyzeStrip(bb, y_start_override)
         ink[y] = count / cols
         span[y] = (xmax >= xmin) and (xmax - xmin + 1) or 0
     end
+    local function inkAt(y)
+        if ink[y] == nil then
+            scanRow(y)
+        end
+        return ink[y]
+    end
 
     -- A page number is a small, sparse, narrow glyph near the bottom edge. Panels
     -- (or panel floors) are denser and wider, so those limits are what reject them.
@@ -478,93 +489,96 @@ function PageNumberCrop.analyzeStrip(bb, y_start_override)
     local max_band_h = math.max(2, h * 0.04) -- typical page numbers are small
     local max_big_band_h = math.max(3, h * 0.15) -- a huge number, if sparse & narrow
     local min_gutter_h = math.max(1, math.floor(h * 0.01))
+    -- A handful of stray dark pixels (scan/compression artifacts, a couple of
+    -- anti-aliased columns) can register as ink at the very low ink_threshold,
+    -- forming a "band" only a few pixels wide. A real digit stroke always spans a
+    -- meaningfully wider horizontal run. Bands narrower than this are treated as
+    -- if they were white space instead of a number/panel candidate -- this both
+    -- stops noise from being mistaken for the number and lets real digit strokes
+    -- merge across noise into a single stack rather than the stack breaking (and
+    -- the crop landing mid-number).
+    local min_band_span = math.max(3, math.floor(w * 0.005))
 
     -- Skip any white margin at the very bottom edge.
     local y = h - 1
-    while y >= y_start and ink[y] <= ink_threshold do
+    while y >= y_start and inkAt(y) <= ink_threshold do
         y = y - 1
     end
     if y < y_start then
         return 0, "no ink at the bottom"
     end
 
-    -- Collect every ink band (contiguous inked rows), bottom-most first.
+    -- Scan upward, closing off one ink band at a time and classifying it
+    -- immediately. Stops the moment a panel-like (real, non-noise) band is
+    -- found: either it's the very first one (nothing to crop -- a panel reaches
+    -- the bottom edge) or a later one (the anchor for the crop point, i.e. the
+    -- panel floor above the page number). Either way, nothing above it is
+    -- relevant, so those rows are never read.
     local bands = {}
+    local descr = {}
     while y >= y_start do
         local bottom = y
-        while y >= y_start and ink[y] > ink_threshold do
-            y = y - 1
-        end
-        table.insert(bands, { top = y + 1, bottom = bottom })
-        while y >= y_start and ink[y] <= ink_threshold do
-            y = y - 1
-        end
-    end
-
-    -- Metrics per band, and classify it as panel-like (dense and/or wide) or
-    -- number-like (sparse & narrow).
-    local descr = {}
-    for _, band in ipairs(bands) do
+        local top = y
         local b_ink, b_span = 0, 0
-        for yy = band.top, band.bottom do
-            if ink[yy] > b_ink then
-                b_ink = ink[yy]
+        local panel_like = false
+        while y >= y_start and inkAt(y) > ink_threshold do
+            top = y
+            if ink[y] > b_ink then b_ink = ink[y] end
+            if span[y] > b_span then b_span = span[y] end
+            if not panel_like and (b_ink > max_row_ink or b_span > max_band_span) then
+                -- panel_like is an "any row in this run exceeds the threshold"
+                -- condition, so one qualifying row is enough to decide it -- no
+                -- need to keep extending upward just to find this band's exact
+                -- top. This is what turns scanning a large solid panel into just
+                -- the handful of rows it took to become unambiguously panel-like.
+                panel_like = true
+                y = y - 1
+                break
             end
-            if span[yy] > b_span then
-                b_span = span[yy]
-            end
+            y = y - 1
         end
-        band.row_ink = b_ink
-        band.span = b_span
-        band.panel_like = b_ink > max_row_ink or b_span > max_band_span
-        table.insert(descr, string.format("h=%d ink=%.2f span=%d%%%s",
-            band.bottom - band.top + 1, b_ink, math.floor(b_span / w * 100),
-            band.panel_like and " PANEL" or ""))
-    end
-    local detail = "bands(" .. #bands .. ") " .. table.concat(descr, ", ")
 
-    -- Drop noise bands: a handful of stray dark pixels (scan/compression
-    -- artifacts, a couple of anti-aliased columns) can register as ink at the
-    -- very low ink_threshold, forming a "band" only a few pixels wide. A real
-    -- digit stroke always spans a meaningfully wider horizontal run. Treat such
-    -- bands as if they were white space instead of a number/panel candidate --
-    -- this both stops noise from being mistaken for the number and lets real
-    -- digit strokes merge across noise into a single stack rather than the
-    -- stack breaking (and the crop landing mid-number).
-    local min_band_span = math.max(3, math.floor(w * 0.005))
-    local real_bands = {}
-    for _, band in ipairs(bands) do
-        if band.span >= min_band_span then
-            table.insert(real_bands, band)
+        local h_str = tostring(bottom - top + 1)
+        if panel_like then h_str = ">=" .. h_str end -- top is a lower bound when short-circuited
+        table.insert(descr, string.format("h=%s ink=%.2f span=%d%%%s",
+            h_str, b_ink, math.floor(b_span / w * 100), panel_like and " PANEL" or ""))
+
+        if b_span >= min_band_span then -- a real (non-noise) band
+            if panel_like then
+                local detail = "bands(" .. #descr .. ") " .. table.concat(descr, ", ")
+                if #bands == 0 then
+                    -- A panel reaching the bottom edge of the page: there is
+                    -- nothing below it to crop, hence no removable page-number strip.
+                    return 0, "panel reaches the bottom [" .. detail .. "]"
+                end
+                -- The bottom-most ink was sparse & narrow: the page number -- but
+                -- possibly only its darker part, since on high-resolution pages the
+                -- number's faint upper strokes render as sparse bands of their own
+                -- (the log showed numbers cropping at a 1-7px gutter, i.e.
+                -- mid-number, because the crop anchored on the darker bottom part
+                -- and the faint top remained visible). Anchor the crop on this
+                -- panel-like band instead -- the panel floor -- so the whole number
+                -- (faint top included) and the margin below the last panel are
+                -- removed.
+                local log_detail = string.format("crop_y=%d %s", bottom, detail)
+                return bottom, log_detail
+            end
+            table.insert(bands, { top = top, bottom = bottom, row_ink = b_ink, span = b_span })
+        end
+
+        -- Skip the white gap above this band before looking for the next one.
+        while y >= y_start and inkAt(y) <= ink_threshold do
+            y = y - 1
         end
     end
-    if #real_bands == 0 then
+
+    -- No panel-like band anywhere in the window: the bottom strip is just the
+    -- page number (plus margin).
+    local detail = "bands(" .. #descr .. ") " .. table.concat(descr, ", ")
+    if #bands == 0 then
         return 0, "only noise bands [" .. detail .. "]", true
     end
-    bands = real_bands
-
     local first = bands[1]
-
-    -- A panel reaching the bottom edge of the page: there is nothing below it to
-    -- crop, hence no removable page-number strip.
-    if first.panel_like then
-        return 0, "panel reaches the bottom [" .. detail .. "]"
-    end
-
-    -- The bottom-most ink is sparse & narrow: the page number -- but possibly only
-    -- its darker part, since on high-resolution pages the number's faint upper
-    -- strokes render as sparse bands of their own (the log showed numbers cropping
-    -- at a 1-7px gutter, i.e. mid-number, because the crop anchored on the darker
-    -- bottom part and the faint top remained visible). Anchor the crop on the first
-    -- panel-like band above the number instead -- the panel floor -- so the whole
-    -- number (faint top included) and the margin below the last panel are removed.
-    for _, band in ipairs(bands) do
-        if band.panel_like then
-            local log_detail = string.format("crop_y=%d floor_h=%d %s",
-                band.bottom, band.bottom - band.top + 1, detail)
-            return band.bottom, log_detail
-        end
-    end
 
     -- No panel-like band in the window: the bottom strip is just the page number
     -- (plus margin). Crop above it as before, extending past the sparse bands that
