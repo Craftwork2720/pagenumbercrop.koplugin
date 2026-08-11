@@ -25,7 +25,9 @@ effect in the content-fit zoom modes. The settings are stored per-book
 
 The same features are exposed as gesture/keyboard-shortcut actions (registered with the
 Dispatcher at module load time), so they can be bound to a gesture: crop the page number
-on the current page, and on/off/toggle for each of the two options.
+on the current page, and on/off/toggle for each of the two options. The actions are
+flagged paging-only, so they only apply to fixed-layout documents (pdf/djvu/pics) and
+don't show up for reflowable (cre) books.
 
 @module koplugin.PageNumberCrop
 --]]--
@@ -938,6 +940,10 @@ end
 -- DispatcherRegisterActions broadcast, which fires at startup before any document
 -- is open. registerAction is idempotent, so the module being required once per
 -- session is fine. The menu/gesture editor reads Dispatcher.settingsList live.
+-- All actions are flagged `paging = true` (no `reader`/`rolling`), the canonical
+-- paged-only scope: Dispatcher:isActionEnabled then disables them on reflowable
+-- (cre) books and in the file manager, and the gesture editor lists them only
+-- under the "Fixed layout documents" section.
 local function registerDispatcherActions()
     if not (Dispatcher and Dispatcher.registerAction) then
         return
@@ -946,43 +952,43 @@ local function registerDispatcherActions()
         category = "none",
         event = "PageNumberCropOnThisPage",
         title = _("Crop page number on this page"),
-        reader = true,
+        paging = true,
     })
     Dispatcher:registerAction("page_number_crop_auto_on", {
         category = "none",
         event = "PageNumberCropAutoOn",
         title = _("Page Number Crop: on"),
-        reader = true,
+        paging = true,
     })
     Dispatcher:registerAction("page_number_crop_auto_off", {
         category = "none",
         event = "PageNumberCropAutoOff",
         title = _("Page Number Crop: off"),
-        reader = true,
+        paging = true,
     })
     Dispatcher:registerAction("page_number_crop_auto_toggle", {
         category = "none",
         event = "PageNumberCropAutoToggle",
         title = _("Page Number Crop: toggle"),
-        reader = true,
+        paging = true,
     })
     Dispatcher:registerAction("no_crop_blank_pages_on", {
         category = "none",
         event = "NoCropBlankPagesOn",
         title = _("No crop on blank pages: on"),
-        reader = true,
+        paging = true,
     })
     Dispatcher:registerAction("no_crop_blank_pages_off", {
         category = "none",
         event = "NoCropBlankPagesOff",
         title = _("No crop on blank pages: off"),
-        reader = true,
+        paging = true,
     })
     Dispatcher:registerAction("no_crop_blank_pages_toggle", {
         category = "none",
         event = "NoCropBlankPagesToggle",
         title = _("No crop on blank pages: toggle"),
-        reader = true,
+        paging = true,
     })
 end
 registerDispatcherActions()
