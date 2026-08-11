@@ -9,7 +9,7 @@ It injects two options into the KOpt (PDF/DjVu) settings dialog, between "Page C
   cropped; if no such strip is found (e.g. a manga panel reaching the bottom of the page),
   nothing is cropped, so no content is ever lost.
 
-* "No crop on blank pages" (toggle, default off): a page that is almost entirely
+* "No crop on blank pages" (toggle, default on): a page that is almost entirely
   white (e.g. a chapter divider or a title page with only a small logo) is shown
   with no crop at all, instead of the auto page-crop zooming into that small
   element. Independent of the page-number crop.
@@ -73,7 +73,7 @@ local NO_CROP_BLANK_PAGES_OPTION = {
     name_text = _("No crop on blank pages"),
     toggle = {C_("No crop on blank pages", "off"), C_("No crop on blank pages", "on")},
     values = {0, 1},
-    default_value = 0,
+    default_value = 1,
     enabled_func = function(configurable)
         -- Same preconditions as the page-number crop: only meaningful on top of the
         -- auto page crop, and not on reflowed documents.
@@ -139,7 +139,7 @@ function PageNumberCrop:init()
     end
     if configurable.no_crop_blank_pages == nil then
         local blank = G_reader_settings:readSetting("kopt_no_crop_blank_pages")
-        configurable.no_crop_blank_pages = blank == nil and 0 or blank
+        configurable.no_crop_blank_pages = blank == nil and 1 or blank
     end
     self:_neutralizeLegacyCrop(configurable)
     logger.info("PageNumberCrop: active; auto-detect =",
