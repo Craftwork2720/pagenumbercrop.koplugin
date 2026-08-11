@@ -12,9 +12,12 @@ A KOReader plugin that removes page numbers from the bottom of manga pages (CBZ)
 
 ## What it does
 
-Automatically detects and removes the page number from each page.
+- Automatically detects and removes the page number from each page.
+- **No crop on blank pages** (optional): pages that are almost entirely white (e.g.
+  a chapter divider or a title page with only a small logo) are shown with no crop
+  at all, instead of being zoomed into that small element.
 
-- only works when **Page Crop** is set to **auto**
+Both features only work when **Page Crop** is set to **auto**.
 
 ## Installation
 
@@ -23,6 +26,7 @@ Copy the `pagenumbercrop.koplugin` folder to the `plugins/` directory and restar
 ## Usage
 
 Open a CBZ → crop settings → **Page Crop: auto** → **Page Number Crop** on (default).
+Optional: **No crop on blank pages** to keep almost-blank pages uncropped.
 
 For updates: menu → **Page Number Crop: check for updates** (or automatically, weekly).
 

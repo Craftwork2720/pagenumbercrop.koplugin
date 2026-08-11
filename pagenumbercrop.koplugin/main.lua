@@ -1,7 +1,7 @@
 --[[--
 This plugin removes the printed page number from the bottom of PDF/DjVu pages.
 
-It injects one option into the KOpt (PDF/DjVu) settings dialog, between "Page Crop" and
+It injects two options into the KOpt (PDF/DjVu) settings dialog, between "Page Crop" and
 "Margin":
 
 * "Page Number Crop" (toggle, default on): each page is rendered at low resolution
@@ -9,14 +9,19 @@ It injects one option into the KOpt (PDF/DjVu) settings dialog, between "Page Cr
   cropped; if no such strip is found (e.g. a manga panel reaching the bottom of the page),
   nothing is cropped, so no content is ever lost.
 
+* "No crop on blank pages" (toggle, default off): a page that is almost entirely
+  white (e.g. a chapter divider or a title page with only a small logo) is shown
+  with no crop at all, instead of the auto page-crop zooming into that small
+  element. Independent of the page-number crop.
+
 The crop only applies when the "Page Crop" setting is "auto": the page-number strip (the
 number plus its white gutter) is removed, so the crop reaches the bottom edge of the main
 content (the bottom-most panel). When Page Crop is none/manual/semi-auto, the plugin is
 inert.
 
 The crop is applied to the page's bounding box, on top of the auto page crop, so it takes
-effect in the content-fit zoom modes. The setting is stored per-book
-(as kopt_page_number_crop_auto) like any other KOpt option.
+effect in the content-fit zoom modes. The settings are stored per-book
+(kopt_page_number_crop_auto, kopt_no_crop_blank_pages) like any other KOpt option.
 
 @module koplugin.PageNumberCrop
 --]]--
@@ -59,9 +64,39 @@ This option is only available when "Page Crop" is set to "auto"; otherwise it is
 greyed out.]]),
 }
 
+-- When "Page Crop" is "auto", a page that is almost entirely white -- e.g. a chapter
+-- divider or a title page with only a small logo -- would be auto-cropped into that
+-- lone small element. This option instead keeps such pages uncropped (an effective
+-- "no crop" for that page), independent of the page-number crop above.
+local NO_CROP_BLANK_PAGES_OPTION = {
+    name = "no_crop_blank_pages",
+    name_text = _("No crop on blank pages"),
+    toggle = {C_("No crop on blank pages", "off"), C_("No crop on blank pages", "on")},
+    values = {0, 1},
+    default_value = 0,
+    enabled_func = function(configurable)
+        -- Same preconditions as the page-number crop: only meaningful on top of the
+        -- auto page crop, and not on reflowed documents.
+        return configurable.text_wrap ~= 1 and configurable.trim_page == 1
+    end,
+    -- Fire the core "ReZoom" event directly, like the page-number crop does, so the
+    -- page is re-rendered with the new state.
+    event = "ReZoom",
+    args = {0, 1},
+    name_text_hold_callback = optionsutil.showValues,
+    help_text = _([[Do not crop almost-blank pages.
+When "Page Crop" is "auto", a page that is almost entirely white -- e.g. a chapter
+divider or a title page with only a small logo -- would otherwise be cropped into
+that small element. When this option is enabled, such pages are shown with no crop
+at all.]]),
+}
+
 local PageNumberCrop = WidgetContainer:extend{
     name = "pagenumbercrop",
     is_doc_only = true,
+    -- Rendering/analysis tuning for the "no crop on blank pages" feature.
+    BLANK_RENDER_MAX_PX = 256,     -- long edge of the low-res full-page analysis tile
+    BLANK_MAX_CONTENT_AREA = 0.10, -- content box smaller than 10% of the page = "almost blank"
 }
 
 -- How often to silently check for updates in the background (once a week).
@@ -102,9 +137,14 @@ function PageNumberCrop:init()
         local auto = G_reader_settings:readSetting("kopt_page_number_crop_auto")
         configurable.page_number_crop_auto = auto == nil and 1 or auto
     end
+    if configurable.no_crop_blank_pages == nil then
+        local blank = G_reader_settings:readSetting("kopt_no_crop_blank_pages")
+        configurable.no_crop_blank_pages = blank == nil and 0 or blank
+    end
     self:_neutralizeLegacyCrop(configurable)
     logger.info("PageNumberCrop: active; auto-detect =",
         configurable.page_number_crop_auto,
+        "; blank skip =", configurable.no_crop_blank_pages,
         "; trim_page =", configurable.trim_page,
         "; text_wrap =", configurable.text_wrap)
 end
@@ -177,7 +217,7 @@ function PageNumberCrop:onReadSettings(config)
     self:_neutralizeLegacyCrop(self.document.configurable)
 end
 
--- Insert the option into the KOpt settings dialog, between "Page Crop" and "Margin".
+-- Insert the options into the KOpt settings dialog, between "Page Crop" and "Margin".
 -- Also drop the obsolete fixed-% crop option from the original core patch, so it
 -- can't be re-enabled and crop the page number again.
 function PageNumberCrop:addOptionToConfigMenu()
@@ -186,9 +226,6 @@ function PageNumberCrop:addOptionToConfigMenu()
             local removed_legacy = false
             for i = #tab.options, 1, -1 do
                 local option = tab.options[i]
-                if option.name == "page_number_crop_auto" then
-                    return -- already inserted (e.g., from a previous document)
-                end
                 if option.name == "page_number_crop" then
                     -- Legacy option from page-number-crop.patch: crops a fixed % of
                     -- the page in every trim mode, with no auto-detect. Superseded
@@ -197,7 +234,21 @@ function PageNumberCrop:addOptionToConfigMenu()
                     removed_legacy = true
                 end
                 if option.name == "trim_page" then
-                    table.insert(tab.options, i + 1, PAGE_NUMBER_CROP_AUTO_OPTION)
+                    -- Insert our options right after "Page Crop", skipping any that are
+                    -- already present (e.g. from a previous document or upgrade).
+                    local has_auto, has_blank = false, false
+                    for _, o in ipairs(tab.options) do
+                        if o.name == "page_number_crop_auto" then has_auto = true end
+                        if o.name == "no_crop_blank_pages" then has_blank = true end
+                    end
+                    local insert_at = i + 1
+                    if not has_auto then
+                        table.insert(tab.options, insert_at, PAGE_NUMBER_CROP_AUTO_OPTION)
+                    end
+                    insert_at = insert_at + 1
+                    if not has_blank then
+                        table.insert(tab.options, insert_at, NO_CROP_BLANK_PAGES_OPTION)
+                    end
                     if removed_legacy then
                         logger.info("PageNumberCrop: removed legacy 'Page number crop' option")
                     end
@@ -220,6 +271,7 @@ function PageNumberCrop:patchPageBBox()
     local orig_getPageBBox = document.getPageBBox
     -- Per-page detection cache, in native (bbox) units. Filled lazily.
     document._pagenum_cache = {}
+    document._pagenum_blank_cache = {}
     -- Rolling history of accepted detections (as a fraction of page height),
     -- used to sanity-check new detections against where the number has
     -- consistently been on earlier pages of this book.
@@ -228,19 +280,25 @@ function PageNumberCrop:patchPageBBox()
         local configurable = self.configurable
         -- Reflowed PDFs have no printed page numbers, and the analysis render must
         -- see the uncropped bbox (see _pagenum_strip below). The crop only makes
-        -- sense on top of the auto page crop, and only while the option is enabled.
-        -- NOTE: 0 is truthy in Lua, so the auto-detect value must be compared to
-        -- a concrete truth (== 1), not used directly as a boolean.
+        -- sense on top of the auto page crop. Each feature is independent: the
+        -- page-number crop additionally needs page_number_crop_auto == 1, while the
+        -- blank-page skip needs no_crop_blank_pages == 1.
+        -- NOTE: 0 is truthy in Lua, so these option values must be compared to
+        -- a concrete truth (== 1), not used directly as booleans.
         local auto = configurable and configurable.page_number_crop_auto
-        local active = configurable and configurable.text_wrap ~= 1
+        local blank = configurable and configurable.no_crop_blank_pages
+        local auto_crop = configurable and configurable.text_wrap ~= 1
             and configurable.trim_page == 1
-            and (auto == 1 or auto == "1")
+        local crop_active = auto_crop and (auto == 1 or auto == "1")
+        local blank_active = auto_crop and (blank == 1 or blank == "1")
+        local active = crop_active or blank_active
         if self._pagenum_state ~= active then
-            -- Log once per state change, so logs show exactly when the crop turns
+            -- Log once per state change, so logs show exactly when the plugin turns
             -- on and off (and why).
             self._pagenum_state = active
             logger.info("PageNumberCrop: state ->", active and "active" or "inactive",
                 "(auto-detect =", configurable and configurable.page_number_crop_auto,
+                ", blank skip =", configurable and configurable.no_crop_blank_pages,
                 ", trim_page =", configurable and configurable.trim_page, ")")
         end
         if self._pagenum_analysis_flag or not active then
@@ -250,20 +308,32 @@ function PageNumberCrop:patchPageBBox()
         if not bbox then
             return bbox
         end
-        -- New bottom edge: the bottom of the main content (the bottom-most panel),
-        -- i.e. everything below it -- the white gutter and the page number -- is
-        -- cropped. 0 when no page number was detected.
-        local crop_y = self:_pagenum_strip(pageno)
-        if crop_y and crop_y > 0 and crop_y > bbox.y0 and crop_y < bbox.y1 then
-            -- Only crop when we're actually removing a meaningful strip (the number
-            -- and its gutter). A one-pixel difference means the auto crop already
-            -- handled it, and we must never shave into the content itself.
+
+        -- Almost-blank pages (a chapter divider, a title page with only a small
+        -- logo...) are shown with no crop at all: the whole page, instead of the
+        -- auto page-crop zooming into the lone small element. This also skips the
+        -- page-number crop below for those pages.
+        if blank_active and self:_page_mostly_blank(pageno) then
             local page_size = self:getNativePageDimensions(pageno)
-            local min_removal = page_size and math.max(1, page_size.h * 0.001) or 1
-            if bbox.y1 - crop_y >= min_removal then
-                -- Copy the bbox so we don't mutate a potentially shared/cached one.
-                bbox = { x0 = bbox.x0, y0 = bbox.y0, x1 = bbox.x1, y1 = bbox.y1 }
-                bbox.y1 = crop_y
+            return { x0 = 0, y0 = 0, x1 = page_size.w, y1 = page_size.h }
+        end
+
+        if crop_active then
+            -- New bottom edge: the bottom of the main content (the bottom-most panel),
+            -- i.e. everything below it -- the white gutter and the page number -- is
+            -- cropped. 0 when no page number was detected.
+            local crop_y = self:_pagenum_strip(pageno)
+            if crop_y and crop_y > 0 and crop_y > bbox.y0 and crop_y < bbox.y1 then
+                -- Only crop when we're actually removing a meaningful strip (the number
+                -- and its gutter). A one-pixel difference means the auto crop already
+                -- handled it, and we must never shave into the content itself.
+                local page_size = self:getNativePageDimensions(pageno)
+                local min_removal = page_size and math.max(1, page_size.h * 0.001) or 1
+                if bbox.y1 - crop_y >= min_removal then
+                    -- Copy the bbox so we don't mutate a potentially shared/cached one.
+                    bbox = { x0 = bbox.x0, y0 = bbox.y0, x1 = bbox.x1, y1 = bbox.y1 }
+                    bbox.y1 = crop_y
+                end
             end
         end
         return bbox
@@ -399,6 +469,54 @@ function PageNumberCrop:patchPageBBox()
         end
         self._pagenum_cache[pageno] = crop_y
         return crop_y
+    end
+
+    -- Decide whether the page is "almost entirely white" (only a small amount of
+    -- content, e.g. a lone logo), in which case the caller shows it with no crop.
+    -- Cached per page; returns false on any failure, so a normal crop is attempted.
+    document._page_mostly_blank = function(self, pageno)
+        local cached = self._pagenum_blank_cache[pageno]
+        if cached ~= nil then
+            return cached
+        end
+        -- Fill first, so a re-entrant render (renderPage -> getPageBBox) never
+        -- recurses on this page.
+        self._pagenum_blank_cache[pageno] = false
+        local page_size = self:getNativePageDimensions(pageno)
+        if not (page_size and page_size.w > 0 and page_size.h > 0) then
+            logger.info("PageNumberCrop: page", pageno,
+                "blank check skipped [ no render (page_size) ]")
+            return false
+        end
+
+        -- Render the whole page at low resolution -- the long edge capped at
+        -- BLANK_RENDER_MAX_PX -- and measure how much of it is inked. Rendering the
+        -- whole page (not a strip) is what makes the "almost entirely white" test
+        -- meaningful, and the small tile keeps the extra cost low.
+        local zoom = math.min(
+            PageNumberCrop.BLANK_RENDER_MAX_PX / page_size.w,
+            PageNumberCrop.BLANK_RENDER_MAX_PX / page_size.h,
+            1.0)
+        self._pagenum_analysis_flag = true
+        local ok, mostly_blank = pcall(function()
+            local rect = Geom:new{ x = 0, y = 0, w = page_size.w, h = page_size.h }
+            rect.scaled_rect = self:transformRect(rect, zoom, 0)
+            local tile = Document.renderPage(self, pageno, rect, zoom, 0, 1.0, 1.0, false)
+            if not tile or not tile.bb then
+                return false
+            end
+            return PageNumberCrop.pageMostlyBlank(tile.bb)
+        end)
+        self._pagenum_analysis_flag = false
+        if ok and type(mostly_blank) == "boolean" then
+            self._pagenum_blank_cache[pageno] = mostly_blank
+            if mostly_blank then
+                logger.info("PageNumberCrop: page", pageno, "mostly blank -> no crop")
+            end
+            return mostly_blank
+        end
+        logger.warn("PageNumberCrop: blank analysis error:", mostly_blank)
+        return false
     end
 end
 
@@ -636,6 +754,46 @@ function PageNumberCrop.analyzeStrip(bb, y_start_override)
     local crop_y = stack_top - gutter_len
     local log_detail = string.format("crop_y=%d %s", crop_y, fallback_detail)
     return crop_y, log_detail
+end
+
+--[[--
+Detect an "almost entirely white" page: the inked content fits inside a small box
+relative to the page (e.g. a lone logo on a chapter divider or title page). Such
+pages are shown with no crop at all, so the auto page-crop doesn't zoom into that
+small element.
+
+@param bb Blitbuffer of the full page rendered at low resolution.
+@treturn boolean true when the page is almost entirely white.
+--]]
+function PageNumberCrop.pageMostlyBlank(bb)
+    local w, h = bb.w, bb.h
+    if not w or not h or w < 20 or h < 20 then
+        return false
+    end
+    -- Only clearly-dark pixels count as content (same threshold as analyzeStrip).
+    local dark_threshold = 128
+    local x_step, y_step = 2, 2 -- sample every other pixel, for speed
+
+    local found = false
+    local xmin, ymin, xmax, ymax = w, h, -1, -1
+    for y = 0, h - 1, y_step do
+        for x = 0, w - 1, x_step do
+            if bb:getPixel(x, y):getColor8().a < dark_threshold then
+                found = true
+                if x < xmin then xmin = x end
+                if x > xmax then xmax = x end
+                if y < ymin then ymin = y end
+                if y > ymax then ymax = y end
+            end
+        end
+    end
+    if not found then
+        return true -- a fully blank page
+    end
+    -- The content box as a fraction of the page area. Below BLANK_MAX_CONTENT_AREA
+    -- the page is almost entirely white: keep it uncropped.
+    local content_area = (xmax - xmin + 1) * (ymax - ymin + 1) / (w * h)
+    return content_area < PageNumberCrop.BLANK_MAX_CONTENT_AREA
 end
 
 return PageNumberCrop
