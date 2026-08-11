@@ -2,7 +2,8 @@
 
 # pagenumbercrop.koplugin
 
-A KOReader plugin that removes page numbers from the bottom of manga pages (CBZ).
+A KOReader plugin that removes page numbers from the bottom of fixed-layout pages
+(CBZ, PDF, DjVu).
 
 <br>
 
@@ -25,10 +26,26 @@ Copy the `pagenumbercrop.koplugin` folder to the `plugins/` directory and restar
 
 ## Usage
 
-Open a CBZ → crop settings → **Page Crop: auto** → **Page Number Crop** on (default).
+Open a CBZ/PDF/DjVu → crop settings → **Page Crop: auto** → **Page Number Crop** on (default).
 Optional: **No crop on blank pages** to keep almost-blank pages uncropped.
 
 For updates: menu → **Page Number Crop: check for updates** (or automatically, weekly).
+
+## Gestures & keyboard shortcuts
+
+The plugin's features can also be bound to a gesture or keyboard shortcut. Once a
+fixed-layout (CBZ/PDF/DjVu) book is open, these actions are available in the gesture
+editor under **Fixed layout documents**:
+
+| Action | Effect |
+| --- | --- |
+| **Crop page number on this page** | Crop on the current page, |
+| **Page Number Crop: on / off / toggle** | Switches the *Page Number Crop* option |
+| **No crop on blank pages: on / off / toggle** | Switches the *No crop on blank pages* option |
+
+Both *Crop page number on this page* and the toggles still require **Page Crop** to be
+set to **auto**. The actions only apply to fixed-layout books and are hidden for
+reflowable ones (epub, fb2, txt…).
 
 ## Compatibility
 
