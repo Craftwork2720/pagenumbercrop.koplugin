@@ -54,8 +54,9 @@ local PAGE_NUMBER_CROP_AUTO_OPTION = {
     event = "ReZoom",
     args = {0, 1},
     name_text_hold_callback = optionsutil.showValues,
-    help_text = _([[Automatically detects and removes the printed page number (and its gutter)
-when "Page Crop" is set to "auto". If no number is found, nothing is cropped.]]),
+    help_text = _([[Master switch for the page-number crop.
+This option is only available when "Page Crop" is set to "auto"; otherwise it is
+greyed out.]]),
 }
 
 local PageNumberCrop = WidgetContainer:extend{
@@ -278,7 +279,7 @@ function PageNumberCrop:patchPageBBox()
         self._pagenum_cache[pageno] = 0 -- fill first, so detection is re-entrant-safe
         local page_size = self:getNativePageDimensions(pageno)
         if not (page_size and page_size.w > 0 and page_size.h > 0) then
-            logger.dbg("PageNumberCrop: page", pageno, "no page number [ no render (page_size) ]")
+            logger.info("PageNumberCrop: page", pageno, "no page number [ no render (page_size) ]")
             self._pagenum_cache[pageno] = 0
             return 0
         end
@@ -391,10 +392,10 @@ function PageNumberCrop:patchPageBBox()
         end
 
         if crop_y > 0 then
-            logger.dbg("PageNumberCrop: page", pageno, "crop y =",
+            logger.warn("PageNumberCrop: page", pageno, "crop y =",
                 string.format("%.1f", crop_y), "[", detail, "]")
         else
-            logger.dbg("PageNumberCrop: page", pageno, "no page number [", detail, "]")
+            logger.info("PageNumberCrop: page", pageno, "no page number [", detail, "]")
         end
         self._pagenum_cache[pageno] = crop_y
         return crop_y
@@ -442,9 +443,13 @@ function PageNumberCrop.analyzeStrip(bb, y_start_override)
 
     local function isDark(color)
         -- color is a color cdata object (Color8/ColorRGB24/ColorRGB32/...) returned
-        -- by bb:getPixel; every color type exposes getR/getG/getB as Lua numbers 0-255.
-        local r, g, b = color:getR(), color:getG(), color:getB()
-        return (r + g + b) / 3 < dark_threshold
+        -- by bb:getPixel. getColor8() is blitbuffer's own canonical grayscale
+        -- conversion: for an already-8bpp-grayscale tile (the common case for a
+        -- render meant only for analysis, not display) it's a no-op (`return self`,
+        -- see koreader-base/ffi/blitbuffer.lua), and for RGB tiles it's a single
+        -- luma-weighted conversion done in fixed-point -- cheaper and more accurate
+        -- than averaging getR()/getG()/getB() ourselves in Lua.
+        return color:getColor8().a < dark_threshold
     end
 
     -- Row ink profile, normalized to [0, 1], plus each row's ink horizontal span.
