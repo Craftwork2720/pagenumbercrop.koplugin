@@ -8,7 +8,7 @@ A KOReader plugin that removes page numbers from the bottom of fixed-layout page
 <br>
 
 <picture>
-<img src="screenshots/pagenumbercrop_menu.png" width="500">
+<img src="screenshots/pagenumbercrop_menu_1.1.0.png" width="500">
 </picture>
 
 ## What it does
