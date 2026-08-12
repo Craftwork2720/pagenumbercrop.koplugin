@@ -31,15 +31,15 @@ Optional: **No crop on blank pages** to keep almost-blank pages uncropped.
 
 For updates: menu → **Page Number Crop: check for updates** (or automatically, weekly).
 
-## Gestures & keyboard shortcuts
+## Gestures & profiles
 
-The plugin's features can also be bound to a gesture or keyboard shortcut. Once a
-fixed-layout (CBZ/PDF/DjVu) book is open, these actions are available in the gesture
-editor under **Fixed layout documents**:
+The plugin's features can also be bound to a gesture or
+combined into a profile. Once a fixed-layout (CBZ/PDF/DjVu) book is open, these
+actions are available under **Fixed layout documents**:
 
 | Action | Effect |
 | --- | --- |
-| **Crop page number on this page** | Crop on the current page, |
+| **Crop page number on this page** | Crop on the current page |
 | **Page Number Crop: on / off / toggle** | Switches the *Page Number Crop* option |
 | **No crop on blank pages: on / off / toggle** | Switches the *No crop on blank pages* option |
 
