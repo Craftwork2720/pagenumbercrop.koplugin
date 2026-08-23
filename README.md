@@ -2,8 +2,7 @@
 
 # pagenumbercrop.koplugin
 
-A KOReader plugin that removes page numbers from the bottom of fixed-layout pages
-(CBZ, PDF, DjVu).
+A KOReader plugin that removes page numbers from the bottom of manga pages.
 
 <br>
 
